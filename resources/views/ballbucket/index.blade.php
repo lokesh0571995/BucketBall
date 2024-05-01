@@ -71,7 +71,7 @@
                $ballname   =DB::table('balls')->where('id',$bucket->ball_id)->value('color');
                
             ?>
-            <h2>{{ ucfirst($bucketname)  }} |  {{ ucfirst($ballname)  }}  {{$bucket->quantity}}</h2>
+            <h2>{{ ucfirst($bucketname)  }} |  {{ ucfirst($ballname)  }}  {{$bucket->ball_count}}</h2>
            
         @endforeach
     @endif

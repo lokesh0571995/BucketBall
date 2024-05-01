@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use App\Models\Bucket;
 use App\Models\Ball;
 use App\Models\BucketBall;
+use DB;
 class BallBucketController extends Controller
 {
     //Get all data ball and bucket
@@ -17,7 +18,7 @@ class BallBucketController extends Controller
         $ballName = Ball::get();
 
         //get all bucket ball dat
-        $bucketball = BucketBall::select('bucket_id','ball_id','quantity')->groupBy('bucket_id','ball_id','quantity')->get();
+        $bucketball = BucketBall::select('bucket_id','ball_id','quantity',DB::raw('sum(quantity) as ball_count'))->groupBy('bucket_id','ball_id','quantity')->get();
        
         return view('ballbucket.index', compact('buckets', 'ballName','bucketball'));
     }
@@ -40,60 +41,62 @@ class BallBucketController extends Controller
 
 
     //store number of ball in bucket
-    public function distributeBalls(Request $request)
-    {
-      
+    public function distributeBalls(Request $request) {
+
+        // Retrieve all buckets and balls
         $buckets = Bucket::orderBy('capacity', 'desc')->get();
         $balls = Ball::all();
         $totalBallVolume = 0;
-        $totalSize = 0;
-        
-        //get ball size and total volume
-        foreach($balls as $ball) {
-            $totalBallVolume += $ball->size * $request->input('quantity_'. $ball->id);
-            $totalSize += $ball->size;
-           
+    
+        // Calculate the total volume of balls requested and update each ball's requested quantity
+        foreach ($balls as $ball) {
+            $ball->requestedQuantity = $request->input('quantity_' . $ball->id, 0);
+            $totalBallVolume += $ball->size * $ball->requestedQuantity;
         }
-
+    
         $bucketSpace = $buckets->sum('capacity');
-
-        //get minimum number of bucket
-        $minBucketsRequired = ceil($totalBallVolume / max($buckets->pluck('capacity')->all()));
-
-        if ($bucketSpace < $totalBallVolume) {
-         
-            return redirect()->back()->with('error','Not enough bucket space to fit all balls required minimum number of bucket '.$minBucketsRequired);
-           
-        }
-
-        //get number of ball count according ball color
+    
         $results = [];
+        $undistributed = [];
+    
+        // Distribute balls into buckets
         foreach ($balls as $ball) {
             foreach ($buckets as $bucket) {
-                $fitCount = min($request->input('quantity_'. $ball->id), intdiv($bucket->capacity, $ball->size));
-                if ($fitCount > 0) {
-                    $results[$bucket->name][$ball->color] = $fitCount;
-                    
-                    // Save each distribution BucketBall
-                    $alreadyAddedBall = BucketBall::where('bucket_id',$bucket->id)->where('ball_id',$ball->id)->first();
-                    if($alreadyAddedBall){
-                       
-                        $alreadyAddedBall->bucket_id =$bucket->id;
-                        $alreadyAddedBall->ball_id   =$ball->id;
-                        $alreadyAddedBall->quantity  =$fitCount;
-                        $alreadyAddedBall->save();
-                    }else{
-                        $bucketBall = new BucketBall();
-                        $bucketBall->bucket_id =$bucket->id;
-                        $bucketBall->ball_id   =$ball->id;
-                        $bucketBall->quantity  =$fitCount;
-                        $bucketBall->save();
+                if ($ball->requestedQuantity > 0 && $bucket->capacity >= $ball->size) {
+                    $fitCount = min($ball->requestedQuantity, intdiv($bucket->capacity, $ball->size));
+                    $bucket->capacity -= $fitCount * $ball->size;
+                    $bucket->save();
+                    $ball->requestedQuantity -= $fitCount;
+    
+                    // distribution data
+                    $results[$bucket->id][$ball->id] = ($results[$bucket->id][$ball->id] ?? 0) + $fitCount;
+    
+                    // Save data
+                    $bucketBall = new BucketBall();
+                    $bucketBall->bucket_id = $bucket->id;
+                    $bucketBall->ball_id   = $ball->id;
+                    $bucketBall->quantity  = $fitCount;
+                    $bucketBall->save();
+    
+                    // If the bucket is now full, move to the next bucket
+                    if ($bucket->capacity < $ball->size) {
+                        break;
                     }
                 }
             }
+    
+            // Check if there are not distributed balls
+            if ($ball->requestedQuantity > 0) {
+                $notdistributed[$ball->id] = ($notdistributed[$ball->id] ?? 0) + $ball->requestedQuantity;
+            }
         }
-
-      return redirect()->back()->with('message','Ball added in bucket successfully!');
-    }  
-     
+    
+        // Check if there were not distributed balls and handle the response
+        if (!empty($notdistributed)) {
+            return redirect()->back()->with('error', "Not all balls could be distributed due to insufficient bucket capacity. ".$bucket->capacity);
+        }
+    
+        return redirect()->back()->with('message', 'All balls saved successfully!');
+    }
+    
 }
